@@ -6,6 +6,11 @@ import os
 import requests
 import base64
 import json
+import logging
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
@@ -19,10 +24,12 @@ def process_image(image):
             new_width = int(width * scale)
             new_height = int(height * scale)
             image = cv2.resize(image, (new_width, new_height))
+            logger.info(f"Resized image to {new_width}x{new_height}")
 
         # Convert image to base64
         _, buffer = cv2.imencode('.jpg', image, [cv2.IMWRITE_JPEG_QUALITY, 85])
         image_base64 = base64.b64encode(buffer).decode('utf-8')
+        logger.info("Image converted to base64")
         
         # Prepare the request to Ultralytics Hub API
         api_url = "https://api.ultralytics.com/v1/predict/YOLOv8n"
@@ -33,17 +40,22 @@ def process_image(image):
         
         payload = {
             "image": image_base64,
-            "confidence": 0.5
+            "confidence": 0.5,
+            "format": "json"
         }
         
-        # Make the API request
-        response = requests.post(api_url, json=payload, headers=headers)
+        logger.info("Sending request to Ultralytics API...")
+        # Make the API request with timeout
+        response = requests.post(api_url, json=payload, headers=headers, timeout=30)
+        logger.info(f"API Response status: {response.status_code}")
         
         if response.status_code != 200:
+            logger.error(f"API request failed: {response.text}")
             raise Exception(f"API request failed: {response.text}")
         
         # Process the API response
         result = response.json()
+        logger.info("Successfully parsed API response")
         
         # Initialize car counter
         car_count = 0
@@ -70,13 +82,15 @@ def process_image(image):
                         cv2.putText(image, label, (x1, y1 - 10), 
                                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
         
+        logger.info(f"Detected {car_count} cars")
+        
         # Display car count
         cv2.putText(image, f'Cars: {car_count}', (10, 30), 
                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
         
         return image, None
     except Exception as e:
-        print(f"Error in process_image: {str(e)}")
+        logger.error(f"Error in process_image: {str(e)}")
         return None, str(e)
 
 @app.route('/detect', methods=['POST'])
@@ -88,6 +102,7 @@ def detect_cars():
         # Read the image file
         file = request.files['image']
         image_bytes = file.read()
+        logger.info(f"Received image of size: {len(image_bytes)} bytes")
         
         # Check file size (limit to 4MB)
         if len(image_bytes) > 4 * 1024 * 1024:
@@ -100,18 +115,23 @@ def detect_cars():
         if image is None:
             return jsonify({'error': 'Invalid image format'}), 400
         
+        logger.info(f"Image decoded successfully, shape: {image.shape}")
+        
         # Process the image
         processed_image, error = process_image(image)
         
         if error:
+            logger.error(f"Error processing image: {error}")
             return jsonify({'error': error}), 500
         
         if processed_image is None:
+            logger.error("Failed to process image")
             return jsonify({'error': 'Failed to process image'}), 500
         
         # Convert the processed image to bytes with reduced quality
         _, buffer = cv2.imencode('.jpg', processed_image, [cv2.IMWRITE_JPEG_QUALITY, 85])
         image_bytes = buffer.tobytes()
+        logger.info(f"Processed image size: {len(image_bytes)} bytes")
         
         # Create a BytesIO object
         img_io = io.BytesIO(image_bytes)
@@ -125,7 +145,7 @@ def detect_cars():
             download_name='processed_image.jpg'
         )
     except Exception as e:
-        print(f"Error in detect_cars: {str(e)}")
+        logger.error(f"Error in detect_cars: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
