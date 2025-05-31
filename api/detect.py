@@ -1,3 +1,4 @@
+from flask import Flask, request, Response
 import cv2
 import numpy as np
 import io
@@ -7,18 +8,18 @@ import base64
 import json
 import logging
 from requests.exceptions import RequestException, Timeout
-from http.server import BaseHTTPRequestHandler
-import cgi
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+app = Flask(__name__)
+
 def process_image(image):
     try:
         # Resize image if too large (reduce to max 150px)
         height, width = image.shape[:2]
-        max_size = 150  # Further reduced from 200 to 150
+        max_size = 150
         if max(height, width) > max_size:
             scale = max_size / max(height, width)
             new_width = int(width * scale)
@@ -27,12 +28,12 @@ def process_image(image):
             logger.info(f"Resized image to {new_width}x{new_height}")
 
         # Convert image to base64 with lower quality
-        _, buffer = cv2.imencode('.jpg', image, [cv2.IMWRITE_JPEG_QUALITY, 30])  # Further reduced quality
+        _, buffer = cv2.imencode('.jpg', image, [cv2.IMWRITE_JPEG_QUALITY, 30])
         image_base64 = base64.b64encode(buffer).decode('utf-8')
         logger.info("Image converted to base64")
         
         # Prepare the request to Ultralytics Hub API
-        api_url = "https://api.ultralytics.com/v1/predict/YOLOv8n"  # Using nano model
+        api_url = "https://api.ultralytics.com/v1/predict/YOLOv8n"
         headers = {
             "Content-Type": "application/json",
             "x-api-key": os.getenv('ULTRALYTICS_API_KEY')
@@ -40,16 +41,15 @@ def process_image(image):
         
         payload = {
             "image": image_base64,
-            "confidence": 0.95,  # Further increased confidence threshold
+            "confidence": 0.95,
             "format": "json",
             "classes": [2, 7],  # Only detect cars (2) and trucks (7)
-            "max_det": 3  # Limit maximum detections
+            "max_det": 3
         }
         
         logger.info("Sending request to Ultralytics API...")
-        # Make the API request with shorter timeout
         try:
-            response = requests.post(api_url, json=payload, headers=headers, timeout=1)  # Reduced timeout to 1s
+            response = requests.post(api_url, json=payload, headers=headers, timeout=1)
             logger.info(f"API Response status: {response.status_code}")
             
             if response.status_code != 200:
@@ -66,28 +66,20 @@ def process_image(image):
             # Process the detections
             if 'predictions' in result:
                 for detection in result['predictions']:
-                    # Get class and confidence
                     cls = int(detection.get('class', 0))
                     conf = float(detection.get('confidence', 0))
                     
-                    # Check if the detected object is a car (class 2) or truck (class 7)
                     if cls in [2, 7]:
                         car_count += 1
-                        # Get box coordinates
                         bbox = detection.get('bbox', [])
                         if len(bbox) == 4:
                             x1, y1, x2, y2 = map(int, bbox)
-                            
-                            # Draw bounding box
                             cv2.rectangle(image, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                            # Add label with rounded confidence
                             label = f'Car {conf:.1f}'
                             cv2.putText(image, label, (x1, y1 - 10), 
                                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
             
             logger.info(f"Detected {car_count} cars")
-            
-            # Display car count
             cv2.putText(image, f'Cars: {car_count}', (10, 30), 
                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
             
@@ -104,94 +96,59 @@ def process_image(image):
         logger.error(f"Error in process_image: {str(e)}")
         return None, str(e)
 
-class handler(BaseHTTPRequestHandler):
-    def do_POST(self):
-        try:
-            # Parse the multipart form data
-            content_type = self.headers.get('Content-Type')
-            if not content_type or 'multipart/form-data' not in content_type:
-                self.send_error(400, "Content-Type must be multipart/form-data")
-                return
-            
-            # Get content length
-            content_length = int(self.headers.get('Content-Length', 0))
-            if content_length == 0:
-                self.send_error(400, "No data received")
-                return
-            
-            # Read the request body
-            post_data = self.rfile.read(content_length)
-            
-            # Parse multipart data
-            boundary = content_type.split('boundary=')[1].encode()
-            parts = post_data.split(b'--' + boundary)
-            
-            image_data = None
-            for part in parts:
-                if b'Content-Disposition: form-data; name="image"' in part:
-                    # Extract image data
-                    header_end = part.find(b'\r\n\r\n')
-                    if header_end != -1:
-                        image_data = part[header_end + 4:]
-                        # Remove trailing boundary markers
-                        if image_data.endswith(b'\r\n'):
-                            image_data = image_data[:-2]
-                        break
-            
-            if image_data is None:
-                self.send_error(400, "No image found in request")
-                return
-            
-            logger.info(f"Received image of size: {len(image_data)} bytes")
-            
-            # Check file size (limit to 100KB)
-            if len(image_data) > 100 * 1024:
-                self.send_error(413, "Image too large. Maximum size is 100KB")
-                return
-            
-            # Convert bytes to numpy array
-            nparr = np.frombuffer(image_data, np.uint8)
-            image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-            
-            if image is None:
-                self.send_error(400, "Invalid image format")
-                return
-            
-            logger.info(f"Image decoded successfully, shape: {image.shape}")
-            
-            # Process the image
-            processed_image, error = process_image(image)
-            
-            if error:
-                logger.error(f"Error processing image: {error}")
-                self.send_error(500, error)
-                return
-            
-            if processed_image is None:
-                logger.error("Failed to process image")
-                self.send_error(500, "Failed to process image")
-                return
-            
-            # Convert the processed image to bytes with reduced quality
-            _, buffer = cv2.imencode('.jpg', processed_image, [cv2.IMWRITE_JPEG_QUALITY, 30])
-            image_bytes = buffer.tobytes()
-            logger.info(f"Processed image size: {len(image_bytes)} bytes")
-            
-            # Send response
-            self.send_response(200)
-            self.send_header('Content-Type', 'image/jpeg')
-            self.send_header('Content-Disposition', 'attachment; filename="processed_image.jpg"')
-            self.send_header('Content-Length', str(len(image_bytes)))
-            self.end_headers()
-            self.wfile.write(image_bytes)
-            
-        except Exception as e:
-            logger.error(f"Error in handler: {str(e)}")
-            self.send_error(500, str(e))
-    
-    def do_GET(self):
-        self.send_error(405, "Method not allowed. Use POST.")
-    
-    def log_message(self, format, *args):
-        # Override to use our logger
-        logger.info(format % args) 
+@app.route('/', methods=['POST'])
+def detect_cars():
+    try:
+        if 'image' not in request.files:
+            return {'error': 'No image provided'}, 400
+        
+        # Read the image file
+        file = request.files['image']
+        image_bytes = file.read()
+        logger.info(f"Received image of size: {len(image_bytes)} bytes")
+        
+        # Check file size
+        if len(image_bytes) > 100 * 1024:
+            return {'error': 'Image too large. Maximum size is 100KB'}, 413
+        
+        # Decode image
+        nparr = np.frombuffer(image_bytes, np.uint8)
+        image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        
+        if image is None:
+            return {'error': 'Invalid image format'}, 400
+        
+        logger.info(f"Image decoded successfully, shape: {image.shape}")
+        
+        # Process the image
+        processed_image, error = process_image(image)
+        
+        if error:
+            logger.error(f"Error processing image: {error}")
+            return {'error': error}, 500
+        
+        if processed_image is None:
+            return {'error': 'Failed to process image'}, 500
+        
+        # Convert processed image to bytes
+        _, buffer = cv2.imencode('.jpg', processed_image, [cv2.IMWRITE_JPEG_QUALITY, 30])
+        image_bytes = buffer.tobytes()
+        logger.info(f"Processed image size: {len(image_bytes)} bytes")
+        
+        # Return the image
+        return Response(
+            image_bytes,
+            mimetype='image/jpeg',
+            headers={'Content-Disposition': 'attachment; filename="processed_image.jpg"'}
+        )
+        
+    except Exception as e:
+        logger.error(f"Error in detect_cars: {str(e)}")
+        return {'error': str(e)}, 500
+
+@app.route('/', methods=['GET'])
+def get_info():
+    return {'message': 'Car Detection API. Send POST request with image file.'}
+
+if __name__ == '__main__':
+    app.run(debug=True) 

@@ -20,9 +20,6 @@ def test_detection():
     # Save resized image with lower quality
     cv2.imwrite('test_image_resized.jpg', image, [cv2.IMWRITE_JPEG_QUALITY, 30])
     
-    # Test local endpoint first (if running locally)
-    # url = 'http://localhost:3000/api/detect'
-    
     # Test deployed endpoint
     url = 'https://vehicle-detection-flame.vercel.app/api/detect'
     
