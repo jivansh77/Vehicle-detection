@@ -1,16 +1,22 @@
 from flask import Flask, request, send_file
 import cv2
-from ultralytics import YOLO
 import numpy as np
 import io
 import os
+from ultralytics import YOLO
 
 app = Flask(__name__)
 
-# Load the YOLO model
-model = YOLO('yolov8n.pt')
+# Initialize model only when needed
+def get_model():
+    if not hasattr(get_model, 'model'):
+        get_model.model = YOLO('yolov8n.pt')
+    return get_model.model
 
 def process_image(image):
+    # Get model instance
+    model = get_model()
+    
     # Run YOLOv8 inference on the image
     results = model(image)
     
@@ -50,35 +56,38 @@ def detect_cars():
     if 'image' not in request.files:
         return {'error': 'No image provided'}, 400
     
-    # Read the image file
-    file = request.files['image']
-    image_bytes = file.read()
-    
-    # Convert bytes to numpy array
-    nparr = np.frombuffer(image_bytes, np.uint8)
-    image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-    
-    if image is None:
-        return {'error': 'Invalid image format'}, 400
-    
-    # Process the image
-    processed_image = process_image(image)
-    
-    # Convert the processed image to bytes
-    _, buffer = cv2.imencode('.jpg', processed_image)
-    image_bytes = buffer.tobytes()
-    
-    # Create a BytesIO object
-    img_io = io.BytesIO(image_bytes)
-    img_io.seek(0)
-    
-    # Return the processed image
-    return send_file(
-        img_io,
-        mimetype='image/jpeg',
-        as_attachment=True,
-        download_name='processed_image.jpg'
-    )
+    try:
+        # Read the image file
+        file = request.files['image']
+        image_bytes = file.read()
+        
+        # Convert bytes to numpy array
+        nparr = np.frombuffer(image_bytes, np.uint8)
+        image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        
+        if image is None:
+            return {'error': 'Invalid image format'}, 400
+        
+        # Process the image
+        processed_image = process_image(image)
+        
+        # Convert the processed image to bytes
+        _, buffer = cv2.imencode('.jpg', processed_image)
+        image_bytes = buffer.tobytes()
+        
+        # Create a BytesIO object
+        img_io = io.BytesIO(image_bytes)
+        img_io.seek(0)
+        
+        # Return the processed image
+        return send_file(
+            img_io,
+            mimetype='image/jpeg',
+            as_attachment=True,
+            download_name='processed_image.jpg'
+        )
+    except Exception as e:
+        return {'error': str(e)}, 500
 
 if __name__ == '__main__':
     app.run(debug=True) 
