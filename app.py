@@ -17,9 +17,9 @@ app = Flask(__name__)
 
 def process_image(image):
     try:
-        # Resize image if too large (reduce to max 400px)
+        # Resize image if too large (reduce to max 300px)
         height, width = image.shape[:2]
-        max_size = 400  # Further reduced from 600 to 400
+        max_size = 300  # Further reduced from 400 to 300
         if max(height, width) > max_size:
             scale = max_size / max(height, width)
             new_width = int(width * scale)
@@ -28,12 +28,12 @@ def process_image(image):
             logger.info(f"Resized image to {new_width}x{new_height}")
 
         # Convert image to base64 with lower quality
-        _, buffer = cv2.imencode('.jpg', image, [cv2.IMWRITE_JPEG_QUALITY, 60])  # Further reduced quality
+        _, buffer = cv2.imencode('.jpg', image, [cv2.IMWRITE_JPEG_QUALITY, 50])  # Further reduced quality
         image_base64 = base64.b64encode(buffer).decode('utf-8')
         logger.info("Image converted to base64")
         
         # Prepare the request to Ultralytics Hub API
-        api_url = "https://api.ultralytics.com/v1/predict/YOLOv8n"
+        api_url = "https://api.ultralytics.com/v1/predict/YOLOv8n"  # Using nano model
         headers = {
             "Content-Type": "application/json",
             "x-api-key": os.getenv('ULTRALYTICS_API_KEY')
@@ -41,14 +41,15 @@ def process_image(image):
         
         payload = {
             "image": image_base64,
-            "confidence": 0.7,  # Further increased confidence threshold
-            "format": "json"
+            "confidence": 0.8,  # Further increased confidence threshold
+            "format": "json",
+            "classes": [2, 7]  # Only detect cars (2) and trucks (7)
         }
         
         logger.info("Sending request to Ultralytics API...")
         # Make the API request with shorter timeout
         try:
-            response = requests.post(api_url, json=payload, headers=headers, timeout=5)  # Reduced timeout to 5s
+            response = requests.post(api_url, json=payload, headers=headers, timeout=3)  # Reduced timeout to 3s
             logger.info(f"API Response status: {response.status_code}")
             
             if response.status_code != 200:
@@ -114,9 +115,9 @@ def detect_cars():
         image_bytes = file.read()
         logger.info(f"Received image of size: {len(image_bytes)} bytes")
         
-        # Check file size (limit to 1MB)
-        if len(image_bytes) > 1 * 1024 * 1024:  # Reduced from 2MB to 1MB
-            return jsonify({'error': 'Image too large. Maximum size is 1MB'}), 413
+        # Check file size (limit to 500KB)
+        if len(image_bytes) > 500 * 1024:  # Reduced from 1MB to 500KB
+            return jsonify({'error': 'Image too large. Maximum size is 500KB'}), 413
         
         # Convert bytes to numpy array
         nparr = np.frombuffer(image_bytes, np.uint8)
@@ -139,7 +140,7 @@ def detect_cars():
             return jsonify({'error': 'Failed to process image'}), 500
         
         # Convert the processed image to bytes with reduced quality
-        _, buffer = cv2.imencode('.jpg', processed_image, [cv2.IMWRITE_JPEG_QUALITY, 60])  # Further reduced quality
+        _, buffer = cv2.imencode('.jpg', processed_image, [cv2.IMWRITE_JPEG_QUALITY, 50])  # Further reduced quality
         image_bytes = buffer.tobytes()
         logger.info(f"Processed image size: {len(image_bytes)} bytes")
         
