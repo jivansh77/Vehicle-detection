@@ -3,6 +3,7 @@ import cv2
 import numpy as np
 import logging
 from ultralytics import YOLO
+import os
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -107,4 +108,5 @@ def get_info():
     return {'message': 'Car Detection API. Send POST request with image file.'}
 
 if __name__ == '__main__':
-    app.run(host='127.0.0.1', port=8080, debug=True) 
+    port = int(os.environ.get('PORT', 8080))
+    app.run(host='0.0.0.0', port=port, debug=False) 
