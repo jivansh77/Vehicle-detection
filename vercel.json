@@ -2,18 +2,18 @@
     "version": 2,
     "builds": [
         {
-            "src": "app.py",
-            "use": "@vercel/python",
-            "config": {
-                "maxLambdaSize": "100mb",
-                "runtime": "python3.12"
-            }
+            "src": "api/detect.py",
+            "use": "@vercel/python"
         }
     ],
     "routes": [
         {
+            "src": "/api/detect",
+            "dest": "/api/detect"
+        },
+        {
             "src": "/detect",
-            "dest": "app.py"
+            "dest": "/api/detect"
         }
     ]
 } 
