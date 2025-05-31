@@ -1,13 +1,8 @@
 from flask import Flask, request, Response
 import cv2
 import numpy as np
-import io
-import os
-import requests
-import base64
-import json
 import logging
-from requests.exceptions import RequestException, Timeout
+from ultralytics import YOLO
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -15,82 +10,43 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
+# Load YOLO model
+model = YOLO('yolov8n.pt')
+
 def process_image(image):
     try:
-        # Resize image if too large (reduce to max 150px)
-        height, width = image.shape[:2]
-        max_size = 150
-        if max(height, width) > max_size:
-            scale = max_size / max(height, width)
-            new_width = int(width * scale)
-            new_height = int(height * scale)
-            image = cv2.resize(image, (new_width, new_height))
-            logger.info(f"Resized image to {new_width}x{new_height}")
-
-        # Convert image to base64 with lower quality
-        _, buffer = cv2.imencode('.jpg', image, [cv2.IMWRITE_JPEG_QUALITY, 30])
-        image_base64 = base64.b64encode(buffer).decode('utf-8')
-        logger.info("Image converted to base64")
+        # Run inference
+        logger.info("Running YOLO inference...")
+        results = model(image)
+        logger.info("Inference completed")
         
-        # Prepare the request to Ultralytics Hub API
-        api_url = "https://api.ultralytics.com/v1/predict/YOLOv8n"
-        headers = {
-            "Content-Type": "application/json",
-            "x-api-key": os.getenv('ULTRALYTICS_API_KEY')
-        }
+        # Process the detections
+        car_count = 0
         
-        payload = {
-            "image": image_base64,
-            "confidence": 0.95,
-            "format": "json",
-            "classes": [2, 7],  # Only detect cars (2) and trucks (7)
-            "max_det": 3
-        }
+        # Get the first result (we only process one image at a time)
+        result = results[0]
         
-        logger.info("Sending request to Ultralytics API...")
-        try:
-            response = requests.post(api_url, json=payload, headers=headers, timeout=1)
-            logger.info(f"API Response status: {response.status_code}")
+        # Draw boxes for cars and trucks (class ids 2 and 7)
+        for box in result.boxes:
+            cls = int(box.cls[0])
+            conf = float(box.conf[0])
             
-            if response.status_code != 200:
-                logger.error(f"API request failed: {response.text}")
-                raise Exception(f"API request failed: {response.text}")
-            
-            # Process the API response
-            result = response.json()
-            logger.info("Successfully parsed API response")
-            
-            # Initialize car counter
-            car_count = 0
-            
-            # Process the detections
-            if 'predictions' in result:
-                for detection in result['predictions']:
-                    cls = int(detection.get('class', 0))
-                    conf = float(detection.get('confidence', 0))
-                    
-                    if cls in [2, 7]:
-                        car_count += 1
-                        bbox = detection.get('bbox', [])
-                        if len(bbox) == 4:
-                            x1, y1, x2, y2 = map(int, bbox)
-                            cv2.rectangle(image, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                            label = f'Car {conf:.1f}'
-                            cv2.putText(image, label, (x1, y1 - 10), 
-                                      cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-            
-            logger.info(f"Detected {car_count} cars")
-            cv2.putText(image, f'Cars: {car_count}', (10, 30), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-            
-            return image, None
-            
-        except Timeout:
-            logger.error("API request timed out")
-            return None, "API request timed out. Please try again with a smaller image."
-        except RequestException as e:
-            logger.error(f"API request failed: {str(e)}")
-            return None, f"API request failed: {str(e)}"
+            if cls in [2, 7]:  # car or truck
+                car_count += 1
+                # Get box coordinates
+                x1, y1, x2, y2 = map(int, box.xyxy[0])
+                
+                # Draw rectangle and label
+                cv2.rectangle(image, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                label = f'Car {conf:.2f}'
+                cv2.putText(image, label, (x1, y1 - 10), 
+                          cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+        
+        logger.info(f"Detected {car_count} cars")
+        cv2.putText(image, f'Cars: {car_count}', (10, 30), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+        
+        return image, None
             
     except Exception as e:
         logger.error(f"Error in process_image: {str(e)}")
@@ -108,8 +64,8 @@ def detect_cars():
         logger.info(f"Received image of size: {len(image_bytes)} bytes")
         
         # Check file size
-        if len(image_bytes) > 100 * 1024:
-            return {'error': 'Image too large. Maximum size is 100KB'}, 413
+        if len(image_bytes) > 1024 * 1024:  # 1MB limit
+            return {'error': 'Image too large. Maximum size is 1MB'}, 413
         
         # Decode image
         nparr = np.frombuffer(image_bytes, np.uint8)
@@ -131,7 +87,7 @@ def detect_cars():
             return {'error': 'Failed to process image'}, 500
         
         # Convert processed image to bytes
-        _, buffer = cv2.imencode('.jpg', processed_image, [cv2.IMWRITE_JPEG_QUALITY, 30])
+        _, buffer = cv2.imencode('.jpg', processed_image, [cv2.IMWRITE_JPEG_QUALITY, 85])
         image_bytes = buffer.tobytes()
         logger.info(f"Processed image size: {len(image_bytes)} bytes")
         
@@ -151,4 +107,4 @@ def get_info():
     return {'message': 'Car Detection API. Send POST request with image file.'}
 
 if __name__ == '__main__':
-    app.run(debug=True) 
+    app.run(host='127.0.0.1', port=8080, debug=True) 
