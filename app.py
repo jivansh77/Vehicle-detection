@@ -3,59 +3,58 @@ import cv2
 import numpy as np
 import io
 import os
-from ultralytics import YOLO
+import requests
+import base64
 
 app = Flask(__name__)
 
-# Initialize model only when needed
-def get_model():
-    if not hasattr(get_model, 'model'):
-        # Use YOLOv8n model with reduced precision
-        get_model.model = YOLO('yolov8n.pt')
-        # Set model to use half precision
-        get_model.model.to('cpu').half()
-    return get_model.model
-
 def process_image(image):
-    # Get model instance
-    model = get_model()
+    # Convert image to base64
+    _, buffer = cv2.imencode('.jpg', image)
+    image_base64 = base64.b64encode(buffer).decode('utf-8')
     
-    # Resize image if too large (max 800px on longest side)
-    height, width = image.shape[:2]
-    max_size = 800
-    if max(height, width) > max_size:
-        scale = max_size / max(height, width)
-        new_width = int(width * scale)
-        new_height = int(height * scale)
-        image = cv2.resize(image, (new_width, new_height))
+    # Prepare the request to Ultralytics Hub API
+    api_url = "https://api.ultralytics.com/v1/predict/YOLOv8n"
+    headers = {
+        "Content-Type": "application/json",
+        "x-api-key": os.getenv('ULTRALYTICS_API_KEY')  # You'll need to set this in Vercel environment variables
+    }
     
-    # Run YOLOv8 inference on the image
-    results = model(image, conf=0.5)  # Increased confidence threshold
+    payload = {
+        "image": image_base64,
+        "confidence": 0.5
+    }
+    
+    # Make the API request
+    response = requests.post(api_url, json=payload, headers=headers)
+    
+    if response.status_code != 200:
+        raise Exception(f"API request failed: {response.text}")
+    
+    # Process the API response
+    result = response.json()
     
     # Initialize car counter
     car_count = 0
     
-    # Process the results
-    for result in results:
-        boxes = result.boxes
-        for box in boxes:
+    # Process the detections
+    for detection in result['predictions']:
+        # Get class and confidence
+        cls = detection['class']
+        conf = detection['confidence']
+        
+        # Check if the detected object is a car (class 2) or truck (class 7)
+        if cls in [2, 7]:
+            car_count += 1
             # Get box coordinates
-            x1, y1, x2, y2 = box.xyxy[0]
-            x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+            x1, y1, x2, y2 = map(int, detection['bbox'])
             
-            # Get class and confidence
-            cls = int(box.cls[0])
-            conf = float(box.conf[0])
-            
-            # Check if the detected object is a car (class 2) or truck (class 7)
-            if cls in [2, 7]:
-                car_count += 1
-                # Draw bounding box
-                cv2.rectangle(image, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                # Add label with rounded confidence
-                label = f'Car {conf:.1f}'
-                cv2.putText(image, label, (x1, y1 - 10), 
-                          cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+            # Draw bounding box
+            cv2.rectangle(image, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            # Add label with rounded confidence
+            label = f'Car {conf:.1f}'
+            cv2.putText(image, label, (x1, y1 - 10), 
+                      cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
     
     # Display car count
     cv2.putText(image, f'Cars: {car_count}', (10, 30), 
