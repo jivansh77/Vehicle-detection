@@ -17,7 +17,8 @@ COPY requirements.txt .
 # Create virtual environment and install dependencies
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt && \
+    pip install --no-cache-dir werkzeug==2.0.3
 
 # Second stage
 FROM python:3.9-slim
@@ -50,5 +51,6 @@ RUN python3 -c "from ultralytics import YOLO; YOLO('yolov8n.pt')"
 # Expose port
 EXPOSE 8080
 
-# Run the application
+# Run the application with explicit Python path
+ENV PYTHONPATH=/opt/venv/lib/python3.9/site-packages
 CMD ["python", "api/detect.py"] 
