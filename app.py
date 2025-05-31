@@ -7,6 +7,7 @@ import requests
 import base64
 import json
 import logging
+from requests.exceptions import RequestException, Timeout
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -16,9 +17,9 @@ app = Flask(__name__)
 
 def process_image(image):
     try:
-        # Resize image if too large (reduce to max 600px)
+        # Resize image if too large (reduce to max 400px)
         height, width = image.shape[:2]
-        max_size = 600  # Reduced from 800 to 600
+        max_size = 400  # Further reduced from 600 to 400
         if max(height, width) > max_size:
             scale = max_size / max(height, width)
             new_width = int(width * scale)
@@ -27,7 +28,7 @@ def process_image(image):
             logger.info(f"Resized image to {new_width}x{new_height}")
 
         # Convert image to base64 with lower quality
-        _, buffer = cv2.imencode('.jpg', image, [cv2.IMWRITE_JPEG_QUALITY, 70])  # Reduced quality
+        _, buffer = cv2.imencode('.jpg', image, [cv2.IMWRITE_JPEG_QUALITY, 60])  # Further reduced quality
         image_base64 = base64.b64encode(buffer).decode('utf-8')
         logger.info("Image converted to base64")
         
@@ -40,55 +41,64 @@ def process_image(image):
         
         payload = {
             "image": image_base64,
-            "confidence": 0.6,  # Increased confidence threshold
+            "confidence": 0.7,  # Further increased confidence threshold
             "format": "json"
         }
         
         logger.info("Sending request to Ultralytics API...")
         # Make the API request with shorter timeout
-        response = requests.post(api_url, json=payload, headers=headers, timeout=10)
-        logger.info(f"API Response status: {response.status_code}")
-        
-        if response.status_code != 200:
-            logger.error(f"API request failed: {response.text}")
-            raise Exception(f"API request failed: {response.text}")
-        
-        # Process the API response
-        result = response.json()
-        logger.info("Successfully parsed API response")
-        
-        # Initialize car counter
-        car_count = 0
-        
-        # Process the detections
-        if 'predictions' in result:
-            for detection in result['predictions']:
-                # Get class and confidence
-                cls = int(detection.get('class', 0))
-                conf = float(detection.get('confidence', 0))
-                
-                # Check if the detected object is a car (class 2) or truck (class 7)
-                if cls in [2, 7]:
-                    car_count += 1
-                    # Get box coordinates
-                    bbox = detection.get('bbox', [])
-                    if len(bbox) == 4:
-                        x1, y1, x2, y2 = map(int, bbox)
-                        
-                        # Draw bounding box
-                        cv2.rectangle(image, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                        # Add label with rounded confidence
-                        label = f'Car {conf:.1f}'
-                        cv2.putText(image, label, (x1, y1 - 10), 
-                                  cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-        
-        logger.info(f"Detected {car_count} cars")
-        
-        # Display car count
-        cv2.putText(image, f'Cars: {car_count}', (10, 30), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-        
-        return image, None
+        try:
+            response = requests.post(api_url, json=payload, headers=headers, timeout=5)  # Reduced timeout to 5s
+            logger.info(f"API Response status: {response.status_code}")
+            
+            if response.status_code != 200:
+                logger.error(f"API request failed: {response.text}")
+                raise Exception(f"API request failed: {response.text}")
+            
+            # Process the API response
+            result = response.json()
+            logger.info("Successfully parsed API response")
+            
+            # Initialize car counter
+            car_count = 0
+            
+            # Process the detections
+            if 'predictions' in result:
+                for detection in result['predictions']:
+                    # Get class and confidence
+                    cls = int(detection.get('class', 0))
+                    conf = float(detection.get('confidence', 0))
+                    
+                    # Check if the detected object is a car (class 2) or truck (class 7)
+                    if cls in [2, 7]:
+                        car_count += 1
+                        # Get box coordinates
+                        bbox = detection.get('bbox', [])
+                        if len(bbox) == 4:
+                            x1, y1, x2, y2 = map(int, bbox)
+                            
+                            # Draw bounding box
+                            cv2.rectangle(image, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                            # Add label with rounded confidence
+                            label = f'Car {conf:.1f}'
+                            cv2.putText(image, label, (x1, y1 - 10), 
+                                      cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+            
+            logger.info(f"Detected {car_count} cars")
+            
+            # Display car count
+            cv2.putText(image, f'Cars: {car_count}', (10, 30), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            
+            return image, None
+            
+        except Timeout:
+            logger.error("API request timed out")
+            return None, "API request timed out. Please try again with a smaller image."
+        except RequestException as e:
+            logger.error(f"API request failed: {str(e)}")
+            return None, f"API request failed: {str(e)}"
+            
     except Exception as e:
         logger.error(f"Error in process_image: {str(e)}")
         return None, str(e)
@@ -104,9 +114,9 @@ def detect_cars():
         image_bytes = file.read()
         logger.info(f"Received image of size: {len(image_bytes)} bytes")
         
-        # Check file size (limit to 2MB)
-        if len(image_bytes) > 2 * 1024 * 1024:  # Reduced from 4MB to 2MB
-            return jsonify({'error': 'Image too large. Maximum size is 2MB'}), 413
+        # Check file size (limit to 1MB)
+        if len(image_bytes) > 1 * 1024 * 1024:  # Reduced from 2MB to 1MB
+            return jsonify({'error': 'Image too large. Maximum size is 1MB'}), 413
         
         # Convert bytes to numpy array
         nparr = np.frombuffer(image_bytes, np.uint8)
@@ -129,7 +139,7 @@ def detect_cars():
             return jsonify({'error': 'Failed to process image'}), 500
         
         # Convert the processed image to bytes with reduced quality
-        _, buffer = cv2.imencode('.jpg', processed_image, [cv2.IMWRITE_JPEG_QUALITY, 70])  # Reduced quality
+        _, buffer = cv2.imencode('.jpg', processed_image, [cv2.IMWRITE_JPEG_QUALITY, 60])  # Further reduced quality
         image_bytes = buffer.tobytes()
         logger.info(f"Processed image size: {len(image_bytes)} bytes")
         
